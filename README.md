@@ -1,4 +1,4 @@
-# Coded Music Scoring with Sonic Pi
+# Sonic Pi Composer Agents
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -13,13 +13,16 @@
    - [Web Application](#web-application)
    - [Command Line Interface](#command-line-interface)
 6. [Output Files](#output-files)
-7. [About](#about)
+7. [Verification](#verification)
 
 ---
 
 ## Introduction
 
-This project is a Multi-Agent System (MAS) that creates music by generating Sonic Pi code. Using generative AI, it produces complete song structures, arrangements, and lyrics based on your preferences. The system generates instrumental compositions (you can add vocals through samples if desired).
+This system coordinates role-specific model prompts to design a song, generate
+Sonic Pi code, review revisions, and package the resulting artifacts. A web
+interface exposes the agent trace and code history; an OSC integration sends
+approved code to a running Sonic Pi instance.
 
 > **Status:** working research prototype. Core composition and web workflows
 > are implemented; automated recording is currently Windows-specific and output
@@ -108,10 +111,10 @@ Alternatively, you can set these in `App/static/config/settings.json`.
 
 ```bash
 # Clone the repository
-git clone https://github.com/takakhoo/Coded_Music_Scoring_SonicPI.git
+git clone https://github.com/takakhoo/sonic-pi-composer-agents.git
 
 # Navigate to the project directory
-cd Coded_Music_Scoring_SonicPI
+cd sonic-pi-composer-agents
 
 # Install Python dependencies
 pip install -r requirements.txt
@@ -229,7 +232,7 @@ python run.py
 ```
 
 You'll be prompted to:
-- Choose an AI model (e.g., "gpt-3.5-turbo", "gpt-4")
+- Choose a configured model provider and model
 - Provide song details: name, duration, style
 - Optionally specify additional requests like chord progressions or musical influences
 
@@ -245,3 +248,14 @@ The system generates the following files in the `Songs` folder, organized in sub
 - **Log File**: Complete logging of the generation process. Useful for debugging if code is lost or incomplete.
 
 If you're using the Full configuration and have your recording device properly configured (Windows only currently), recordings are made automatically.
+
+## Verification
+
+The Python suite was collected and run on September 16, 2026. The live Sonic Pi
+integration test skips automatically when no OSC-enabled Sonic Pi process is
+available; all import and syntax checks pass, including the generated-code
+review path that previously contained an invalid nested f-string. CI exercises
+the same dependency-free boundary.
+
+Model-provider calls, live OSC execution, and Windows audio capture are
+integration tests and require the credentials or applications described above.
