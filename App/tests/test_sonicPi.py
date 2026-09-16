@@ -1,10 +1,15 @@
 import unittest
+import os
 from unittest.mock import MagicMock, patch
-from App.sonicPi import SonicPi
-from App.song import Song
+from App.services.sonicPi import SonicPi
+from App.services.song import Song
 import logging
 import time
 
+@unittest.skipUnless(
+    os.environ.get("SONIC_PI_INTEGRATION") == "1",
+    "requires a live Sonic Pi instance; set SONIC_PI_INTEGRATION=1 to run",
+)
 class TestSonicPiIntegration(unittest.TestCase):
     def setUp(self):
         self.logger = logging.getLogger("SonicPiTest")

@@ -40,10 +40,16 @@ class Song:
 
         # Full path samples in the sonic pi code for song (excluded from parameter to avoid sending to openai, anthropic, ...)
         project_directory = os.path.join(project_root, "Samples")
+        def resolve_sample_path(match):
+            sample_path = os.path.normpath(
+                os.path.join(project_directory, match.group(1))
+            ).replace("\\", "\\\\")
+            return f'sample "{sample_path}"'
+
         finalcode = re.sub(
             r'sample\s+"([^"]+)"',
-            lambda match: f'sample "{os.path.normpath(f"{project_directory}/{match.group(1)}").replace("\\", "\\\\")}"',
-            song_creation_data.sonicpi_code
+            resolve_sample_path,
+            song_creation_data.sonicpi_code,
         )
 
         self.song_dir = song_directory
@@ -96,5 +102,4 @@ class Song:
         # Write the content to README.md
         with open(readme_file, 'w', encoding='utf-8') as file:
             file.write(readme_content)
-
 
