@@ -4,8 +4,8 @@ live_loop :listen do
 
   begin
     eval script[0]
-    osc_send '127.0.0.1', 4559, '/feedback', 'MusicAgent Code was executed successfully'
+    osc_send '127.0.0.1', script[2], '/feedback', script[1], 'OK: Code submitted successfully'
   rescue Exception => e
-    osc_send '127.0.0.1', 4559, '/feedback', e.message
+    osc_send '127.0.0.1', script[2], '/feedback', script[1], "ERROR: #{e.class}: #{e.message}"
   end
 end

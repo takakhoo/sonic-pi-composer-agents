@@ -7,6 +7,7 @@ librosa>=0.10,<1
 numpy>=1.26,<3
 openai>=1.44,<3
 python-osc>=1.9,<2
+Pillow>=11,<13
 requests>=2.32,<3
 scipy>=1.13,<2
 sentence-transformers>=3.0,<6

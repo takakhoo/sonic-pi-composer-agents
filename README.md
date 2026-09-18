@@ -1,5 +1,42 @@
 # Sonic Pi Composer Agents
 
+## Reproduce the review loop without API keys
+
+```bash
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-offline.txt
+python -m pytest App/tests -q
+python offline_demo.py
+```
+
+Read the [complete review trace](results/offline/review-trace.json) and
+[resulting arpeggio fixture](results/offline/arpeggio.rb). For each of the OpenAI,
+Azure, and Anthropic adapters, a scripted draft receives an error; the next
+request includes that error and supplies a corrected draft. Real loopback UDP
+messages exercise the transport. A separate lost-reply case times out rather
+than hanging, and stale success replies are ignored.
+
+**What this proves:** bounded request/reply handling, cleanup, and feedback
+propagation through the actual review loop. **What it does not prove:** these
+are deliberately scripted model replies and runtime acknowledgments, not model
+quality, Ruby execution, audio rendering, or mastering. No provider calls,
+microphone access, Sonic Pi installation or API keys are needed. Eight offline
+tests pass; the real Sonic Pi integration test is opt-in.
+
+The transport now returns feedback (previously it returned `None`), resets
+request state, correlates replies by ID, and uses a bounded timeout. Review
+errors are passed into the next provider request instead of being discarded or
+appended to a nonexistent message list. Azure receives its deployment name in
+the model field; Anthropic receives a message list rather than a string.
+
+**Upgrade note:** reload [recording.rb](SonicPi/Setup/recording.rb) in Sonic Pi.
+The old uncorrelated listener is incompatible and will now time out. This
+listener is for Sonic Pi and Python running on the **same computer**. Review all
+generated Ruby before playback: `eval` is not a sandbox, and OSC has no
+authentication. Keep it on a trusted local machine, never expose it publicly.
+An `OK` acknowledges submission, not completion of every asynchronous loop.
+
 ## Table of Contents
 1. [Introduction](#introduction)
 2. [How It Works](#how-it-works)
@@ -105,7 +142,7 @@ or configuration file:
   $env:AZURE_OPENAI_API_KEY='<your_api_key>'
   ```
 
-Alternatively, you can set these in `App/static/config/settings.json`.
+Keep secrets out of the tracked settings file; use environment variables.
 
 ### Installation
 
@@ -179,23 +216,9 @@ For the Eval and Full configurations, you'll need additional setup:
 
 1. **Launch Sonic Pi** on your machine
 2. **Configure connection**: Update `ArtistConfig.json` with the correct `sonic_pi_IP` and `sonic_pi_port` (found in Sonic Pi IDE via menu > IO). Make sure incoming OSC messages are allowed.
-3. **Set up the listener**: Copy and run this code in Sonic Pi (must be running before starting the system):
-
-```ruby
-live_loop :listen do
-  use_real_time
-  script = sync "/osc*/run-code"
-  
-  begin
-    eval script[0]
-    osc_send '127.0.0.1', 4559, '/feedback', 'MusicAgent Code was executed successfully'
-  rescue Exception => e
-    osc_send '127.0.0.1', 4559, '/feedback', e.message
-  end
-end
-```
-
-Alternatively, you can load `SonicPi/Setup/recording.rb` directly in Sonic Pi.
+3. **Set up the listener**: Load the current `SonicPi/Setup/recording.rb` in
+Sonic Pi on the same computer. It echoes each request ID and replies to the
+temporary loopback port included by the client. Do not use an older copy.
 
 4. Once running, you'll see the listener active in your Cues panel, enabling Sonic Pi to execute your generated code and send feedback back to the system.
 
@@ -251,11 +274,9 @@ If you're using the Full configuration and have your recording device properly c
 
 ## Verification
 
-The Python suite was collected and run on September 16, 2026. The live Sonic Pi
-integration test skips automatically when no OSC-enabled Sonic Pi process is
-available; all import and syntax checks pass, including the generated-code
-review path that previously contained an invalid nested f-string. CI exercises
-the same dependency-free boundary.
+CI installs the small pinned offline requirements, runs eight regression tests,
+replays all three provider adapters, and uploads the trace. It also compiles the
+Python sources. The live integration test skips unless explicitly enabled.
 
 Model-provider calls, live OSC execution, and Windows audio capture are
 integration tests and require the credentials or applications described above.

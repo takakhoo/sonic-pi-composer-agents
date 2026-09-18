@@ -1,108 +1,84 @@
-from pythonosc import udp_client, dispatcher, osc_server
+"""Bounded, correlated OSC requests to the local Sonic Pi listener.
+
+Reload SonicPi/Setup/recording.rb after updating: replies now echo a request ID.
+This is transport, not a Ruby sandbox. Review code before sending it to Sonic Pi.
+"""
+from pathlib import Path
+import math
 import threading
-import time
+import uuid
+
+from pythonosc import udp_client, dispatcher, osc_server
+
+
+def feedback_succeeded(message):
+    return isinstance(message, str) and message.startswith("OK:")
+
 
 class SonicPi:
     def __init__(self, logger):
+        self.logger = logger
         self.feedback_received = False
         self.feedback_message = ""
-        self.logger = logger
-        self.server = None
-        self.server_thread = None
+        self.server = self.server_thread = None
+        self._request_id = None
+        self._feedback = threading.Event()
+        self._call_lock = threading.Lock()
 
     def handle_message(self, address, *args):
-        """Handles incoming OSC messages."""
-        self.feedback_message = f"Received message from {address}: {args}"
+        if len(args) != 2 or args[0] != self._request_id or self._feedback.is_set():
+            return  # Ignore stale, uncorrelated and duplicate datagrams.
+        self.feedback_message = str(args[1])
         self.feedback_received = True
-        self.logger.info(f"Received message from {address}: {args}")
+        self._feedback.set()
+        self.logger.info("Sonic Pi feedback: %s", self.feedback_message)
 
     def shutdown_server(self):
-        """Shuts down the OSC server."""
-        if self.server and self.server_thread:
-            print("Shutting down the server...")
-            self.server.shutdown()
-            self.server.server_close()
-            self.server_thread.join()
-            self.server = None
-            self.server_thread = None
-            print("Server shut down successfully.")
+        server, thread = self.server, self.server_thread
+        if server is not None:
+            if thread is not None and thread.is_alive():
+                server.shutdown()
+                thread.join()
+            server.server_close()
+        self.server = self.server_thread = None
 
     def read_script_from_file(self, file_path):
-        try:
-            with open(file_path, 'r') as file:
-                return file.read()
-        except Exception as e:
-            print(f"Failed to read script from file {file_path}: {str(e)}")
-            return None
+        return Path(file_path).read_text(encoding="utf-8")
 
-    def call_sonicpi(self, song, ip_address, port, full_script=None):
-        # If full_script is not provided, read it from the file
+    def call_sonicpi(self, song, ip_address, port, full_script=None, *, timeout=120,
+                     feedback_port=0):
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be finite and positive")
         if full_script is None:
-            script_file_path = f"{song.song_dir}\\{song.name}.rb"
-            self.logger.info("Script in path " + script_file_path)
-            full_script = self.read_script_from_file(script_file_path)
-
-        self.logger.info(f"Running code in Sonic PI on {ip_address}:{port}")
-        print(f"Running code in Sonic PI on {ip_address}:{port}")
-        
-        # Set up the OSC client to communicate with Sonic Pi
-        client = udp_client.SimpleUDPClient(ip_address, port)
-
-        # Attempt to shutdown any previous server instance
+            full_script = self.read_script_from_file(Path(song.song_dir) / f"{song.name}.rb")
+        if not isinstance(full_script, str) or not full_script.strip():
+            raise ValueError("script must be nonempty text")
+        if len(full_script.encode("utf-8")) > 60000:
+            raise ValueError("script exceeds the safe OSC UDP payload budget")
+        if not self._call_lock.acquire(blocking=False):
+            raise RuntimeError("a Sonic Pi request is already in progress")
         try:
-            self.shutdown_server()
-        except AttributeError:
-            pass  # First run, no server to shutdown
-
-        # Set up OSC dispatcher to handle incoming messages
-        disp = dispatcher.Dispatcher()
-        disp.map("/feedback", self.handle_message)
-
-        # Try to start the server on the desired port
-        for attempt in range(3):  # Try 3 times
+            self.feedback_received = False
+            self.feedback_message = ""
+            self._feedback.clear()
+            self._request_id = uuid.uuid4().hex
+            disp = dispatcher.Dispatcher()
+            disp.map("/feedback", self.handle_message)
+            self.server = osc_server.ThreadingOSCUDPServer(("127.0.0.1", feedback_port), disp)
+            self.server.daemon_threads = True
+            self.server_thread = threading.Thread(
+                target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+            self.server_thread.start()
+            client = udp_client.SimpleUDPClient(ip_address, port)
             try:
-                self.server = osc_server.ThreadingOSCUDPServer(("127.0.0.1", 4559), disp)
-                self.server_thread = threading.Thread(target=self.server.serve_forever)
-                self.server_thread.start()
-                print("Server started successfully.")
-                break  # If successful, break out of the loop
-            except OSError as e:
-                print(f"Error starting OSC server: {e}")
-
-                if attempt < 2:  # If not the last attempt, retry
-                    print(f"Port in use, retrying in 2 seconds... (Attempt {attempt + 1}/3)")
-
-                    # Shutdown server before retrying if on second attempt
-                    if attempt == 1:
-                        self.shutdown_server()
-
-                    time.sleep(2)
-                else:  # If it's the last attempt, raise an error
-                    print("Failed to start the server after 3 attempts.")
-                    return
-
-        self.logger.info("Script before sending: \n" + full_script)
-        print(f"Sending \n" + full_script)
-        client.send_message('/run-code', full_script)
-
-        # Schedule the shutdown_server to run after 2 minutes
-        shutdown_timer = threading.Timer(120, self.shutdown_server)
-        shutdown_timer.start()
-
-        # Wait for feedback, print message every 5 seconds
-        start_time = time.time()
-        while not self.feedback_received:
-            elapsed_time = time.time() - start_time
-            if elapsed_time >= 10:
-                print(f"Waiting for response from Sonic PI - If you're not hearing anything... you might still need to run the recording code (Sonicpi/Setup) in your Sonic Pi IDE.")
-                start_time = time.time()  # Reset the timer after printing the message
-            time.sleep(0.1)
-
-        # Print feedback message
-        print(self.feedback_message)
-
-        # Cancel the shutdown timer if feedback is received before the 2-minute mark
-        shutdown_timer.cancel()
-
-        # Shutdown server after receiving feedback
-        self.shutdown_server()
+                client.send_message("/run-code", [full_script, self._request_id,
+                                                self.server.server_address[1]])
+                if not self._feedback.wait(timeout):
+                    raise TimeoutError(f"No correlated Sonic Pi feedback within {timeout:g} seconds")
+                return self.feedback_message
+            finally:
+                client.close()
+        finally:
+            self._request_id = None
+            self.shutdown_server()
+            self._call_lock.release()

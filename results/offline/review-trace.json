@@ -1,0 +1,83 @@
+{
+  "runs": [
+    {
+      "provider_adapter": "openai",
+      "mode": "scripted fixtures, no model calls or Ruby execution",
+      "attempts": 2,
+      "scripts_sent": [
+        "use_synth :nonexistent\nplay 60",
+        "use_bpm 96\nuse_synth :piano\n2.times do\n  [60, 64, 67, 71, 69, 67, 64, 62].each do |n|\n    play n, release: 0.6, amp: 0.4\n    sleep 0.5\n  end\nend\n"
+      ],
+      "retry_receives_error": true,
+      "feedback": "OK: corrected fixture accepted",
+      "transport_cleaned_up": true,
+      "review_messages": [
+        {
+          "role": "user",
+          "content": "Write eight beats in C major at 96 BPM."
+        },
+        {
+          "role": "assistant",
+          "content": "{\"sonicpi_code\": \"use_synth :nonexistent\\nplay 60\"}"
+        },
+        {
+          "role": "user",
+          "content": "Feedback from Sonic Pi: ERROR: unknown synth. Please correct the code."
+        }
+      ]
+    },
+    {
+      "provider_adapter": "azure",
+      "mode": "scripted fixtures, no model calls or Ruby execution",
+      "attempts": 2,
+      "scripts_sent": [
+        "use_synth :nonexistent\nplay 60",
+        "use_bpm 96\nuse_synth :piano\n2.times do\n  [60, 64, 67, 71, 69, 67, 64, 62].each do |n|\n    play n, release: 0.6, amp: 0.4\n    sleep 0.5\n  end\nend\n"
+      ],
+      "retry_receives_error": true,
+      "feedback": "OK: corrected fixture accepted",
+      "transport_cleaned_up": true,
+      "review_messages": [
+        {
+          "role": "user",
+          "content": "Write eight beats in C major at 96 BPM."
+        },
+        {
+          "role": "assistant",
+          "content": "{\"sonicpi_code\": \"use_synth :nonexistent\\nplay 60\"}"
+        },
+        {
+          "role": "user",
+          "content": "Feedback from Sonic Pi: ERROR: unknown synth. Please correct the code."
+        }
+      ]
+    },
+    {
+      "provider_adapter": "anthropic",
+      "mode": "scripted fixtures, no model calls or Ruby execution",
+      "attempts": 2,
+      "scripts_sent": [
+        "use_synth :nonexistent\nplay 60",
+        "use_bpm 96\nuse_synth :piano\n2.times do\n  [60, 64, 67, 71, 69, 67, 64, 62].each do |n|\n    play n, release: 0.6, amp: 0.4\n    sleep 0.5\n  end\nend\n"
+      ],
+      "retry_receives_error": true,
+      "feedback": "OK: corrected fixture accepted",
+      "transport_cleaned_up": true,
+      "review_messages": [
+        {
+          "role": "user",
+          "content": "Write eight beats in C major at 96 BPM."
+        },
+        {
+          "role": "assistant",
+          "content": "{\"sonicpi_code\": \"use_synth :nonexistent\\nplay 60\"}"
+        },
+        {
+          "role": "user",
+          "content": "Feedback from Sonic Pi: ERROR: unknown synth. Please correct the code."
+        }
+      ]
+    }
+  ],
+  "timeout_case": "timed out; stale success ignored; server closed"
+}

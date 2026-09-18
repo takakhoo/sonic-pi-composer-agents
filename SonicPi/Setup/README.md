@@ -1,19 +1,14 @@
-# Setup
+# Local playback listener
 
-In order to playback MusicAgent generated Sonic PI files you'll need to load `Sonicpi/Setup/recording.rb` in your Sonic PI.
-Make sure incoming OSC is enabled in your Sonic PI IDE to capture incoming messages.
+Load [recording.rb](recording.rb) into Sonic Pi on the same computer as Python.
+Enable incoming OSC in the IDE and configure `SONIC_PI_PORT` to match its port.
+Reload this file when upgrading: requests now carry `[code, request_id, reply_port]`;
+replies carry `[request_id, "OK: …" or "ERROR: …"]` on `/feedback`.
 
-**recording.rb**
-```bash
-live_loop :listen do
-  use_real_time
-  script = sync "/osc*/run-code"
-  
-  begin
-    eval script[0]
-    osc_send '127.0.0.1', 4559, '/feedback', 'MusicAgent Code was executed successfully'
-  rescue Exception => e
-    osc_send '127.0.0.1', 4559, '/feedback', e.message
-  end
-end
-```
+Review generated Ruby before sending it. This listener evaluates code and is
+**not a sandbox**. OSC is unauthenticated; use only on a trusted local machine
+with public-network access blocked. The acknowledgment confirms submission,
+not the successful completion of asynchronous `live_loop` threads.
+
+To test the protocol without executing code, run `python offline_demo.py` from
+the repository root. See the root README for the isolated dependency set.

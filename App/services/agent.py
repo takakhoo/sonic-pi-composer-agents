@@ -3,26 +3,19 @@ GPTAgent class for interacting with OpenAI, Anthropic, or Azure OpenAI APIs.
 Handles music generation, song creation, and agent coordination.
 '''
 
-from openai import OpenAI
-from openai import AzureOpenAI
-from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
-from .audiorecorder import AudioRecorder
 from .songCreationData import SongCreationData
-from .sonicPi import SonicPi
+from .sonicPi import SonicPi, feedback_succeeded
 from pythonosc import udp_client, dispatcher as osc_dispatcher, osc_server
-import tiktoken
 import json
 import os
 import requests
-import imghdr
+from io import BytesIO
 import re
 import threading
 import time
 import asyncio
 import datetime
-import faiss
 import numpy as np
-from sentence_transformers import SentenceTransformer
 from App.config import Config
 
 class GPTAgent:
@@ -62,6 +55,7 @@ class GPTAgent:
             f.write("\n" + "-"*80 + "\n\n")
 
     def count_tokens(self, content, model):
+        import tiktoken
         try:
             encoding = tiktoken.encoding_for_model(model)
         except KeyError:
@@ -100,6 +94,20 @@ class GPTAgent:
 
     def get_api_key(self):
         return Config.get_api_key(self.api_provider)
+
+    def create_client(self):
+        # Offline review/OSC tests do not require SDKs, embeddings or audio devices.
+        if self.api_provider == 'openai':
+            from openai import OpenAI
+            return OpenAI(api_key=self.get_api_key())
+        if self.api_provider == 'azure':
+            from openai import AzureOpenAI
+            return AzureOpenAI(api_key=self.get_api_key(), azure_endpoint=Config.get_azure_endpoint(),
+                               api_version=Config.get_azure_api_version())
+        if self.api_provider == 'anthropic':
+            from anthropic import Anthropic
+            return Anthropic(api_key=self.get_api_key())
+        raise ValueError(f"Unsupported provider: {self.api_provider}")
 
     # Function to get assistant content from ArtistConfig
     def get_assistant_content(self, role_name, artist_config):
@@ -150,6 +158,7 @@ class GPTAgent:
             return "Unknown task type"
 
     def song_recording(self, artist_config,duration=30):
+        from .audiorecorder import AudioRecorder
         self.logger.info(f"Starting song recording phase.")
         recorder = AudioRecorder(self.logger, self.song, artist_config)
         recorder.run(duration=duration, specific_device_index=43)  # Adjust device index as needed
@@ -233,8 +242,7 @@ class GPTAgent:
             raise ValueError(f"Deployment name not configured for model {self.selected_model}")
 
         completion = client.chat.completions.create(
-            model=self.selected_model,
-            deployment_name=deployment_name,
+            model=deployment_name,
             messages=openai_messages
         )
         response_text = completion.choices[0].message.content
@@ -248,6 +256,8 @@ class GPTAgent:
         return response_text
 
     def local_discussion(self, client, phase, song_creation_data, artist_config, phase_config):
+        import faiss
+        from sentence_transformers import SentenceTransformer
         if phase not in phase_config:
             self.logger.info(f"No configuration found for phase: {phase}")
             return
@@ -331,14 +341,12 @@ class GPTAgent:
 
         retry_count = 0
         max_retries = 3
+        self.conversation_history = [{"role": "user", "content": phase_prompt}]
         while retry_count < max_retries:
             try:
 
+                openai_messages = [{"role": "system", "content": system_content}] + self.conversation_history
                 if self.api_provider == 'openai':
-                    openai_messages = [
-                        {"role": "system", "content": system_content},
-                        {"role": "user", "content": phase_prompt}
-                    ]
                     if self.check_token_limit(system_content, phase_prompt, self.selected_model):
                         response_text = self.handle_openai_request(client, system_content, phase_prompt, openai_messages)
                 elif self.api_provider == 'azure': #Azure
@@ -346,7 +354,7 @@ class GPTAgent:
                         response_text = self.handle_azure_openai_request(client, system_content, phase_prompt, openai_messages)
                 elif self.api_provider == 'anthropic':  # Anthropic
                     if self.check_token_limit(system_content, phase_prompt, self.selected_model):
-                        response_text = self.handle_anthropic_request(client, system_content, phase_prompt)
+                        response_text = self.handle_anthropic_request(client, system_content, self.conversation_history)
 
                 phase_prompt_single_line = phase_prompt.replace('\n', ' ')
                 self.logger.info(f"[Questioner]({user_role_name}):[[{phase_prompt_single_line}]]")
@@ -411,17 +419,20 @@ class GPTAgent:
     def validate_and_execute_code(self, song_creation_data, artist_config, response_text):
         self.song.create_song_file(song_creation_data)
         self.logger.info(f"Running song in Sonic Pi: {self.song.song_dir}/{self.song.name}")
-        feedback_message = self.run_sonic_pi_script(self.song, artist_config)
+        try:
+            feedback_message = self.run_sonic_pi_script(self.song, artist_config)
+        except (TimeoutError, OSError) as exc:
+            feedback_message = f"ERROR: {exc}"
 
-        if feedback_message is not None and "error" in feedback_message.lower():
+        if not feedback_succeeded(feedback_message):
             self.logger.info(f"Error detected in Sonic Pi execution: {feedback_message}")
             self.append_feedback_messages(response_text, feedback_message)
             return False
         return True
 
     def append_feedback_messages(self, response_text, feedback_message):
-        self.messages.append({"role": "assistant", "content": response_text})
-        self.messages.append({"role": "user", "content": f"Feedback from Sonic Pi: {feedback_message}. Please correct the code."})
+        self.conversation_history.append({"role": "assistant", "content": response_text})
+        self.conversation_history.append({"role": "user", "content": f"Feedback from Sonic Pi: {feedback_message}. Please correct the code."})
 
     def handle_json_decode_error(self, response_text, song_creation_data, phase_config, artist_config):
         marker = '"sonicpi_code": "'
@@ -450,12 +461,7 @@ class GPTAgent:
         with open(os.path.join(project_root, 'AgentConfig', self.agentType, 'ArtistConfig.json')) as file:
             artist_config = json.load(file)
 
-        if self.api_provider == 'openai':
-            client = OpenAI(api_key=self.get_api_key())
-        elif self.api_provider =='azure':
-            client = AzureOpenAI(api_key=self.get_api_key(), azure_endpoint=Config.get_azure_endpoint(), api_version=Config.get_azure_api_version())
-        else:
-            client = Anthropic(api_key=self.get_api_key())
+        client = self.create_client()
 
         song_description = f"I want to compose a brand new song. I like the "+genre+" genre. If I would describe the song, I would say: "+additional_information
 
@@ -487,7 +493,7 @@ class GPTAgent:
 
     def generate_and_download_image(self, prompt, filename, songdir, phase_config, phase):
         if self.api_provider == 'openai':
-            client = OpenAI(api_key=self.get_api_key())
+            client = self.create_client()
         else:
             # Anthropic doesn't have an image generation API, so we'll need to use an alternative
             self.logger.info("Image generation not supported with Anthropic API.")
@@ -516,10 +522,10 @@ class GPTAgent:
         self.logger.info(f"[Assistant]({assistant_role_name}):[[Cover image generated {image_url} .]]")
 
         # Download the image
-        image_response = requests.get(image_url)
+        image_response = requests.get(image_url, timeout=30)
         if image_response.status_code == 200:
             # Detect image type
-            image_type = imghdr.what(None, h=image_response.content)
+            image_type = self.get_image_type(BytesIO(image_response.content))
             if image_type:
                 # Append the correct extension if necessary
                 if not filename.lower().endswith(f".{image_type}"):
@@ -542,9 +548,10 @@ class GPTAgent:
         return token_count * price
 
     def get_image_type(self, image_content):
+        from PIL import Image
         try:
             with Image.open(image_content) as img:
-                return img.format  # Returns the image format (e.g., 'JPEG', 'PNG')
+                return img.format.lower()
         except Exception as e:
             print(f"Error: {e}")
             return None
@@ -621,7 +628,7 @@ class GPTAgent:
         prompt = system_content + "\n\n" + conversation_history_str + "\n\n" + user_message["content"]
 
         if self.api_provider == 'openai':
-            client = OpenAI(api_key=self.get_api_key())
+            client = self.create_client()
             messages = [
                 {"role": "system", "content": system_content + "\n\n" + conversation_history_str},
                 user_message
@@ -630,18 +637,14 @@ class GPTAgent:
             response_text = self.handle_openai_request(client, system_content, prompt,messages)
 
         elif self.api_provider == 'azure':
-            client = AzureOpenAI(
-                api_key=self.get_api_key(),
-                azure_endpoint=Config.get_azure_endpoint()
-                # api_version=Config.get_azure_api_version()
-            )
+            client = self.create_client()
             messages = [
                 {"role": "system", "content": system_content + "\n\n" + conversation_history_str},
                 user_message
             ]
             response_text = self.handle_azure_openai_request(client, system_content, prompt,messages)
         elif self.api_provider == 'anthropic':
-            client = Anthropic(api_key=self.get_api_key())
+            client = self.create_client()
             self.logger.info(f"Sending request to Anthropic: {prompt}")
             response_text = self.handle_anthropic_request(client, system_content, conversation_history)
         else:
